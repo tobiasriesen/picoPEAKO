@@ -36,7 +36,9 @@ def round_to_odd(f):
 
 
 def argnearest(array, value):
-    """larda function to find the index of the nearest value in a sorted array, for example time or range axis
+    """
+    larda function to find the index of the nearest value in a sorted array, for example time or
+    range axis
 
     :param array: sorted array with values, list and dask arrays will be converted to 1D array
     :param value: value for which to find the nearest neighbor
@@ -74,7 +76,9 @@ def get_closest_time(time, time_array):
     """
     time_array = time_array.values
     if (time_array < 1e9).all() and (time_array > 3e8).all():
-        time_array = (datetime.datetime(2001, 1, 1) - datetime.datetime(1970, 1, 1)).total_seconds() + time_array
+        time_array += (
+            (datetime.datetime(2001, 1, 1) - datetime.datetime(1970, 1, 1)).total_seconds()
+        )
     ts = (time - datetime.datetime(1970, 1, 1)).total_seconds()
     return argnearest(time_array, ts)
 
@@ -89,7 +93,9 @@ class TrainingData(object):
 
         """
         self.specfiles_in = specfiles_in
-        self.spec_data = [xr.open_dataset(fin, mask_and_scale=True) for fin in specfiles_in]
+        self.spec_data = [
+            xr.open_dataset(fin, mask_and_scale=True) for fin in specfiles_in
+        ]
         self.num_spec = [num_spec] * len(self.spec_data)
         self.tdim = []
         self.rdim = []
@@ -102,8 +108,8 @@ class TrainingData(object):
 
     def mark_random_spectra(self, plot_smoothed=False, **kwargs):
         """
-        Mark random spectra in TrainingData.spec_data (number of randomly drawn spectra in time-height space defined by
-        TrainingData.num_spec) and save x and y locations
+        Mark random spectra in TrainingData.spec_data (number of randomly drawn spectra in
+        time-height space defined by TrainingData.num_spec) and save x and y locations
         :param kwargs:
                num_spec: update TrainingData.num_spec
                span: span for smoothing. Required if plot_smoothed=True
@@ -120,9 +126,15 @@ class TrainingData(object):
             s = 0
             if closeby[n] is not None:
                 tind = get_closest_time(closeby[n][0], self.spec_data[n].time)
-                tind = (np.max([1, tind - 10]), np.min([self.tdim[n] - 1, tind + 10]))
+                tind = (
+                    np.max([1, tind - 10]),
+                    np.min([self.tdim[n] - 1, tind + 10])
+                )
                 rind = argnearest(self.spec_data[n].range, closeby[n][1])
-                rind = (np.max([1, rind - 5]), np.min([self.rdim[n] - 1, rind + 5]))
+                rind = (
+                    np.max([1, rind - 5]),
+                    np.min([self.rdim[n] - 1, rind + 5])
+                )
             elif yRange[n] is not None:
                 tind = (1, self.tdim[n] - 1)
                 rind = yRange
@@ -136,20 +148,24 @@ class TrainingData(object):
                     print(f'r: {random_index_r}, t: {random_index_t}')
 
                 # vals will be NaN if there is no data available for the given spectrum.
-                vals, _ = self._input_peak_locations(n, random_index_t, random_index_r, plot_smoothed, **kwargs)
+                vals, _ = self._input_peak_locations(
+                    n, random_index_t, random_index_r, plot_smoothed, **kwargs
+                )
 
                 # Skip if no peaks were found
                 if not np.all(np.isnan(vals)):
                     self.training_data_out[n]['time'][s] = self.spec_data[n].time[random_index_t]
-                    self.training_data_out[n]['range'][s] = self.spec_data[n].range_layers[random_index_r]
+                    self.training_data_out[n]['range'][s] = (
+                        self.spec_data[n].range_layers[random_index_r]
+                    )
                     self.training_data_out[n]['positions'][s, 0:len(vals)] = vals
                     s += 1
                     self.plot_count[n] = s
 
     def _update_dimensions(self, num_spec):
         """
-        update the list of time and range dimensions stored in TrainingData.tdim and TrainingData.rdim,
-        update arrays in which found peaks are stored,
+        update the list of time and range dimensions stored in TrainingData.tdim and
+        TrainingData.rdim, update arrays in which found peaks are stored,
         also update the names of the netcdf files into which found peaks are stored
         """
         self.tdim = []
@@ -173,7 +189,10 @@ class TrainingData(object):
             'time': (('spec'), np.empty(num_spec, dtype='datetime64[ns]')),
             'range': (('spec'), np.empty(num_spec, dtype='float32')),
             'chirp': (('spec'), np.empty(num_spec, dtype='int32')),
-            'positions': (('spec', 'peak'), np.empty((num_spec, self.max_peaks), dtype='int32'))
+            'positions': (
+                ('spec', 'peak'),
+                np.empty((num_spec, self.max_peaks), dtype='int32')
+            )
         }
         ds = xr.Dataset(data_dict)
         return ds
@@ -197,17 +216,23 @@ class TrainingData(object):
 
         heightindex_center = r_index
         timeindex_center = t_index
-        this_spectrum_center = self.spec_data[n_file]['doppler_spectrum'][int(timeindex_center), int(heightindex_center), :]
-        # print(f'time index center: {timeindex_center}, height index center: {heightindex_center}')
+        this_spectrum_center = self.spec_data[n_file]['doppler_spectrum'][
+            int(timeindex_center), int(heightindex_center), :
+        ]
         if not np.sum(~np.isnan(this_spectrum_center.values)) < 2:
             velbins = self.spec_data[n_file]['velocity_vectors'][c_ind - 1, :]
-            xlim = velbins.values[~np.isnan(this_spectrum_center.values) & ~(this_spectrum_center.values == 0)][[0, -1]]
+            xlim = velbins.values[
+                ~np.isnan(this_spectrum_center.values) & ~(this_spectrum_center.values == 0)
+            ][[0, -1]]
             xlim += [-1, +1]
             # if this spectrum is not empty, we plot 3x3 panels with shared x and y axes
             fig, ax = plt.subplots(3, 3, figsize=[11, 11], sharex=True, sharey=True)
-            fig.suptitle(f'Mark peaks in the center panel spectrum. Fig. {self.plot_count[n_file] + 1} out of '
-                         f'{self.num_spec[n_file]}; File {n_file + 1} of {len(self.spec_data)}', size='xx-large',
-                         fontweight='semibold')
+            fig.suptitle(
+                f'Mark peaks in the center panel spectrum. Fig. {self.plot_count[n_file] + 1} '
+                f'out of {self.num_spec[n_file]}; File {n_file + 1} of {len(self.spec_data)}',
+                size='xx-large',
+                fontweight='semibold'
+            )
             for dim1 in range(3):
                 for dim2 in range(3):
                     if not (dim1 == 1 and dim2 == 1):  # if this is not the center panel plot
@@ -221,42 +246,80 @@ class TrainingData(object):
                             timeindex = timeindex - 1
                             comment = comment + ' (time boundary)'
 
-                        thisSpectrum = self.spec_data[n_file]['doppler_spectrum'][int(timeindex), int(heightindex), :]
+                        thisSpectrum = self.spec_data[n_file]['doppler_spectrum'][
+                            int(timeindex), int(heightindex), :
+                        ]
 
                         # print(f'time index: {timeindex}, height index: {heightindex}')
                         if heightindex == -1 or timeindex == -1:
                             thisSpectrum = thisSpectrum.where(thisSpectrum.values == -999)
                             comment = comment + ' (time or range boundary)'
 
+                        range_in_km = np.round(
+                            self.spec_data[n_file]["range_layers"].values[int(heightindex)] / 1000,
+                            2
+                        )
+                        time_in_hms = format_hms(
+                            self.spec_data[n_file]["time"].values[int(timeindex)]
+                        )
+
                         ax[dim1, dim2].plot(velbins, lin2z(thisSpectrum.values))
                         ax[dim1, dim2].set_xlim(xlim)
-                        ax[dim1, dim2].set_title(f'range:'
-                                                 f'{np.round(self.spec_data[n_file]["range_layers"].values[int(heightindex)] / 1000, 2)} km,'
-                                                 f' time: {format_hms(self.spec_data[n_file]["time"].values[int(timeindex)])}' + comment,
-                                                 fontweight='semibold', fontsize=9, color='b')
-                        ax[dim1, dim2].set_xlabel("Doppler velocity [m/s]", fontweight='semibold', fontsize=9)
-                        ax[dim1, dim2].set_ylabel("Reflectivity [dBZ]", fontweight='semibold', fontsize=9)
+                        ax[dim1, dim2].set_title(
+                            f'range:'
+                            f'{range_in_km} km,'
+                            f' time: {time_in_hms}' + comment,
+                            fontweight='semibold', fontsize=9, color='b'
+                        )
+                        ax[dim1, dim2].set_xlabel(
+                            "Doppler velocity [m/s]", fontweight='semibold', fontsize=9
+                        )
+                        ax[dim1, dim2].set_ylabel(
+                            "Reflectivity [dBZ]", fontweight='semibold', fontsize=9
+                        )
                         ax[dim1, dim2].grid(True)
 
             ax[1, 1].plot(velbins, lin2z(this_spectrum_center.values), label='raw')
             if plot_smoothed:
-                assert 'span' in kwargs, "span required for mark_random_spectra if plot_smoothed is True"
-                window_length = round_to_odd(kwargs['span'] / get_vel_resolution(velbins))
+                assert 'span' in kwargs, (
+                    "span required for mark_random_spectra if plot_smoothed is True"
+                )
+                window_length = round_to_odd(
+                    kwargs['span'] / get_vel_resolution(velbins)
+                )
                 smoothed_spectrum = lin2z(this_spectrum_center.values)
                 if not window_length == 1:
                     smoothed_spectrum[~np.isnan(smoothed_spectrum)] = scipy.signal.savgol_filter(
-                        smoothed_spectrum[~np.isnan(smoothed_spectrum)], window_length, polyorder=2, mode='nearest')
-                ax[1, 1].plot(velbins, smoothed_spectrum, color='midnightblue', label='smoothed')
+                        smoothed_spectrum[~np.isnan(smoothed_spectrum)],
+                        window_length,
+                        polyorder=2,
+                        mode='nearest'
+                    )
+                ax[1, 1].plot(
+                    velbins, smoothed_spectrum, color='midnightblue', label='smoothed'
+                )
 
-            ax[1, 1].set_xlabel("Doppler velocity [m/s]", fontweight='semibold', fontsize=9)
-            ax[1, 1].set_ylabel("Reflectivity [dBZ m$^{-1}$s]", fontweight='semibold', fontsize=9)
+            ax[1, 1].set_xlabel(
+                "Doppler velocity [m/s]", fontweight='semibold', fontsize=9
+            )
+            ax[1, 1].set_ylabel(
+                "Reflectivity [dBZ m$^{-1}$s]", fontweight='semibold', fontsize=9
+            )
             ax[1, 1].grid(True)
             ax[1, 1].legend()
 
-            ax[1, 1].set_title(f'range:'
-                               f'{np.round(self.spec_data[n_file]["range_layers"].values[int(heightindex_center)] / 1000, 2)} km,'
-                               f' time: {format_hms(self.spec_data[n_file]["time"].values[int(timeindex_center)])}' +
-                               comment, fontweight='semibold', fontsize=9, color='r')
+            range_in_km = np.round(
+                self.spec_data[n_file]["range_layers"].values[int(heightindex_center)] / 1000, 2
+            )
+            time_in_hms = format_hms(self.spec_data[n_file]["time"].values[int(timeindex_center)])
+
+            ax[1, 1].set_title(
+                f'range:'
+                f'{range_in_km} km,'
+                f' time: {time_in_hms}' +
+                comment,
+                fontweight='semibold', fontsize=9, color='r'
+            )
             x = plt.ginput(self.max_peaks, timeout=0)
             # important in PyCharm:
             # uncheck Settings | Tools | Python Scientific | Show Plots in Toolwindow
