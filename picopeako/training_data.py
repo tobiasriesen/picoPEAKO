@@ -53,17 +53,6 @@ def argnearest(array, value):
     return i
 
 
-def mask_velocity_vectors(spec_data: list):
-    """
-    Mask invalid values in velocity vectors not properly masked by xarray
-    :param spec_data: list of xarray DataSets containing Doppler spectra, and the variable velocity_vectors
-    :return:
-    """
-    for i in range(len(spec_data)):
-        np.putmask(spec_data[i].velocity_vectors.values, spec_data[i].velocity_vectors.values > 9000, np.nan)
-    return spec_data
-
-
 def get_vel_resolution(vel_bins):
     return np.nanmedian(np.diff(vel_bins))
 
@@ -91,60 +80,25 @@ def get_closest_time(time, time_array):
 
 
 class TrainingData(object):
-    def __init__(self, specfiles_in: list, num_spec=[30], max_peaks=5, verbosity=0):
+    def __init__(self, specfiles_in: list, num_spec=30, max_peaks=5, verbosity=0):
         """
         Initialize TrainingData object; read in the spectra files contained in specfiles_in
         :param specfiles_in: list of strings specifying radar spectra files (netcdf format)
-        :param num_spec: (list) number of spectra to mark by the user (default 30)
+        :param num_spec: (int) number of spectra to mark by the user (default 30)
         :param max_peaks: (int) maximum number of peaks per spectrum (default 5)
 
         """
         self.specfiles_in = specfiles_in
         self.spec_data = [xr.open_dataset(fin, mask_and_scale=True) for fin in specfiles_in]
-        self.spec_data = mask_velocity_vectors(self.spec_data)
-        self.num_spec = []
+        self.num_spec = [num_spec] * len(self.spec_data)
         self.tdim = []
         self.rdim = []
         self.training_data_out = []
         self.peaks_ncfiles = []
         self.plot_count = []
         self.verbosity = verbosity
-
-        for _ in range(len(self.spec_data)):
-            self.num_spec.append(num_spec[0])
-            num_spec.append(num_spec.pop(0))
         self.max_peaks = max_peaks
-        self.update_dimensions()
-
-    def add_spectrafile(self, specfile, num_spec=30):
-        """
-         Open another netcdf file and add it to the list of TrainingData.spec_data
-        :param specfile: (str)  spectra netcdf file to add the list of training data
-        :param num_spec: (int)  number of spectra to mark by the user (default is 30)
-        """
-        self.spec_data.append(xr.open_mfdataset(specfile, combine='by_coords'))
-        self.num_spec.append(num_spec)
-        self.update_dimensions()
-
-    def update_dimensions(self):
-        """
-        update the list of time and range dimensions stored in TrainingData.tdim and TrainingData.rdim,
-        update arrays in which found peaks are stored,
-        also update the names of the netcdf files into which found peaks are stored
-        """
-        self.tdim = []
-        self.rdim = []
-        self.training_data_out = []
-
-        # loop over netcdf files
-        for f in range(len(self.spec_data)):
-            self.tdim.append(len(self.spec_data[f]['time']))
-            self.rdim.append(len(self.spec_data[f]['range']))
-            self.training_data_out.append(np.full((self.tdim[-1], self.rdim[-1], self.max_peaks), np.nan))
-            ncfile = '/'.join(self.specfiles_in[f].split('/')[0:-1]) + \
-                     '/' + 'marked_peaks_' + self.specfiles_in[f].split('/')[-1]
-            self.peaks_ncfiles.append(ncfile)
-            self.plot_count.append(0)
+        self._update_dimensions(num_spec)
 
     def mark_random_spectra(self, plot_smoothed=False, **kwargs):
         """
@@ -180,55 +134,51 @@ class TrainingData(object):
                 random_index_r = random.randint(rind[0], rind[1])
                 if self.verbosity > 1:
                     print(f'r: {random_index_r}, t: {random_index_t}')
-                vals, _ = self.input_peak_locations(n, random_index_t, random_index_r, plot_smoothed, **kwargs)
+
+                # vals will be NaN if there is no data available for the given spectrum.
+                vals, _ = self._input_peak_locations(n, random_index_t, random_index_r, plot_smoothed, **kwargs)
+
+                # Skip if no peaks were found
                 if not np.all(np.isnan(vals)):
-                    self.training_data_out[n][random_index_t, random_index_r, 0:len(vals)] = vals
+                    self.training_data_out[n]['time'][s] = self.spec_data[n].time[random_index_t]
+                    self.training_data_out[n]['range'][s] = self.spec_data[n].range_layers[random_index_r]
+                    self.training_data_out[n]['positions'][s, 0:len(vals)] = vals
                     s += 1
                     self.plot_count[n] = s
 
-    def mark_random_spectra_jupyter(self, plot_smoothed=False, chirp=0, **kwargs):
+    def _update_dimensions(self, num_spec):
         """
-        Mark random spectra in TrainingData.spec_data (number of randomly drawn spectra in time-height space defined by
-        TrainingData.num_spec) and save x and y locations
-        :param kwargs:
-               num_spec: update TrainingData.num_spec
-               span: span for smoothing. Required if plot_smoothed=True
+        update the list of time and range dimensions stored in TrainingData.tdim and TrainingData.rdim,
+        update arrays in which found peaks are stored,
+        also update the names of the netcdf files into which found peaks are stored
         """
+        self.tdim = []
+        self.rdim = []
+        self.training_data_out = []
 
-        if 'num_spec' in kwargs:
-            self.num_spec[:] = kwargs['num_spec']
+        # loop over netcdf files
+        for f in range(len(self.spec_data)):
+            self.tdim.append(len(self.spec_data[f]['time']))
+            self.rdim.append(len(self.spec_data[f]['range']))
+            self.training_data_out.append(self._empty_training_dataset(num_spec))
+            ncfile = os.path.join(
+                os.path.dirname(self.specfiles_in[f]),
+                f'marked_peaks_{os.path.basename(self.specfiles_in[f])}.nc'
+            )
+            self.peaks_ncfiles.append(ncfile)
+            self.plot_count.append(0)
 
-        closeby = kwargs['closeby'] if 'closeby' in kwargs else np.repeat(None, len(self.spec_data))
+    def _empty_training_dataset(self, num_spec):
+        data_dict = {
+            'time': (('spec'), np.empty(num_spec, dtype='datetime64[ns]')),
+            'range': (('spec'), np.empty(num_spec, dtype='float32')),
+            'chirp': (('spec'), np.empty(num_spec, dtype='int32')),
+            'positions': (('spec', 'peak'), np.empty((num_spec, self.max_peaks), dtype='int32'))
+        }
+        ds = xr.Dataset(data_dict)
+        return ds
 
-        self.all_markings = [[]]
-
-        assert len(self.spec_data) == 1, 'jupyter not implemented for multiple files'
-        n = 0  # only the first file for now
-
-        if closeby[n] is not None:
-            tind = get_closest_time(closeby[n][0], self.spec_data[n].time)
-            tind = (np.max([1, tind - 10]), np.min([self.tdim[n] - 1, tind + 10]))
-            rind = argnearest(self.spec_data[n].range, closeby[n][1])
-            rind = (np.max([1, rind - 5]), np.min([self.rdim[n] - 1, rind + 5]))
-        else:
-            tind = (1, self.tdim[n] - 1)
-            rind = (1, self.rdim[n] - 1)
-
-        # modify the function call slightly
-        print('possible range indices',  rind)
-        print(self.spec_data[n]['chirp_start_indices'].values)
-
-        if chirp is not None:
-            n_rg = self.spec_data[n]['chirp_start_indices']
-            range_chirp_mapping = np.repeat(
-                np.arange(len(n_rg)), np.diff(np.hstack((n_rg, len(self.spec_data[n].range)))))
-            inds = np.where(range_chirp_mapping == 1)[0]
-            rind = (max(rind[0], int(inds[0])+1), min(rind[1], int(inds[-1])-1))
-            print('new rind', rind)
-
-        return self.input_peak_locations_jupyter(n, tind, rind, plot_smoothed)
-
-    def input_peak_locations(self, n_file, t_index, r_index, plot_smoothed, **kwargs):
+    def _input_peak_locations(self, n_file, t_index, r_index, plot_smoothed, **kwargs):
         """
         :param n_file: the index of the netcdf file from which to mark spectrum by hand
         :param t_index: the time index of the spectrum
@@ -318,155 +268,21 @@ class TrainingData(object):
         else:
             return np.nan, np.nan
 
-    def input_peak_locations_jupyter(self, n_file, t_range, r_range, plot_smoothed, **kwargs):
-        from ipywidgets import ToggleButton, HBox, Output, AppLayout
-
-        self.heightindex_center = random.randint(r_range[0], r_range[1])
-        self.timeindex_center = random.randint(t_range[0], t_range[1])
-        this_spectrum_center = self.spec_data[n_file]['doppler_spectrum'][int(self.timeindex_center), int(self.heightindex_center), :]
-
-        if not np.sum(~np.isnan(this_spectrum_center.values)) < 2:
-            # Create figure and subplots
-            plt.close('all')
-            # somehow that context is needed to not double display the plot
-            with plt.ioff():
-                fig, ax = plt.subplots(3, 3, figsize=[8, 8], sharex=True, sharey=True)
-            fig.canvas.toolbar_visible = False
-            fig.canvas.header_visible = False
-            fig.suptitle(f'Mark peaks in the center panel spectrum. Fig. {self.plot_count[n_file] + 1} out of '
-                         f'{self.num_spec[n_file]}; File {n_file + 1} of {len(self.spec_data)}',
-                         size='x-large', fontweight='semibold')
-
-            self.fig, self.ax = self.update_subplots(fig, ax, this_spectrum_center, self.heightindex_center, self.timeindex_center, n_file)
-
-            # Toggle button for finishing marking
-            toggle = ToggleButton(
-                value=False,
-                description='Next spec',
-                disabled=False,
-                button_style='',
-                tooltip='Next spec',
-                icon='forward'  # Checkmark icon
-            )
-            finish = ToggleButton(
-                value=False,
-                description='Finish',
-                disabled=False,
-                button_style='',
-                tooltip='Finish marking',
-                icon='check'  # Checkmark icon
-            )
-
-            # Output widget to display messages
-            output = Output()
-
-            # Define callback for clicking on the plot
-            def onclick(event):
-                with output:
-                    output.clear_output()
-                    print(f"click at : {event.xdata}{event.ydata} in? {event.inaxes== ax[1, 1]}")
-                if event.inaxes == ax[1, 1]:  # Only allow clicks in center panel
-                    ax[1, 1].scatter(event.xdata, event.ydata, color='black', zorder=2, marker='x')  # Mark the peak
-                    self.all_markings[-1].append([event.xdata, event.ydata])  # Save the peak
-                    fig.canvas.draw()  # Redraw the figure to update the plot
-
-            # Define callback for toggle button
-            def ontoggle(change):
-                for dim1 in range(3):
-                    for dim2 in range(3):
-                        self.ax[dim1, dim2].clear()
-
-                # update the vals
-                xvals = [e[0] for e in self.all_markings[-1]]
-                self.training_data_out[n_file][self.timeindex_center, self.heightindex_center, 0:len(xvals)] = xvals
-                self.plot_count[n_file] = len(self.all_markings)
-                self.all_markings.append([])
-
-                # next spectrum...
-                self.heightindex_center = random.randint(r_range[0], r_range[1])
-                self.timeindex_center = random.randint(t_range[0], t_range[1])
-                this_spectrum_center = self.spec_data[n_file]['doppler_spectrum'][int(self.timeindex_center), int(self.heightindex_center), :]
-                ret = self.update_subplots(self.fig, self.ax, this_spectrum_center, self.heightindex_center, self.timeindex_center, n_file)
-                self.fig, self.ax = ret
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
-
-            def onfinish(change):
-                for dim1 in range(3):
-                    for dim2 in range(3):
-                        self.ax[dim1, dim2].clear()
-
-                # update the vals
-                xvals = [e[0] for e in self.all_markings[-1]]
-                self.training_data_out[n_file][self.timeindex_center, self.heightindex_center, 0:len(xvals)] = xvals
-                self.plot_count[n_file] = len(self.all_markings)
-                # self.all_markings = [[]]
-                self.fig.canvas.draw()
-                self.fig.canvas.flush_events()
-
-            # Add the callback events
-            toggle.observe(ontoggle, names='value')
-            finish.observe(onfinish, names='value')
-            fig.canvas.mpl_connect('button_press_event', onclick)
-
-            # Show the plot
-            AL = AppLayout(
-                # header=output,
-                center=fig.canvas,
-                footer=HBox([toggle, finish]),
-                pane_heights=[0, 6, 0.5]
-            )
-            return AL
-
-    def update_subplots(self, fig, ax, this_spectrum_center, r_index, t_index, n_file):
-        # Plot all subplots
-        n_rg = self.spec_data[n_file]['chirp_start_indices']
-        c_ind = np.digitize(self.heightindex_center, n_rg)
-        velbins = self.spec_data[n_file]['velocity_vectors'][c_ind - 1, :]
-        xlim = velbins.values[~np.isnan(this_spectrum_center.values) & ~(this_spectrum_center.values == 0)][
-                [0, -1]]
-        xlim += [-1, +1]  # Extend limits for better visibility
-        for dim1 in range(3):
-            for dim2 in range(3):
-                if not (dim1 == 1 and dim2 == 1):
-                    heightindex = r_index - 1 + dim1
-                    timeindex = t_index - 1 + dim2
-
-                    thisSpectrum = self.spec_data[n_file]['doppler_spectrum'][int(timeindex), int(heightindex),:]
-
-                    ax[dim1, dim2].plot(velbins, lin2z(thisSpectrum.values))
-                    ax[dim1, dim2].set_xlim(xlim)
-                    ax[dim1, dim2].grid(True)
-                ax[dim1, dim2].set_xlabel("Doppler velocity [m s$^{-1}$]", fontweight='semibold', fontsize=9)
-                ax[dim1, dim2].set_ylabel("Reflectivity [dBZ]", fontweight='semibold', fontsize=9)
-
-        # Plot center panel
-        ax[1, 1].plot(velbins, lin2z(this_spectrum_center.values), label='raw', color='r')
-        ax[1, 1].grid(True)
-        ax[1, 1].legend()
-        return fig, ax
-
     def save_training_data(self):
         """
         save the marked peaks stored in TrainingData.training_data_out to a netcdf file.
         If the netcdf file does not exist yet, create it in place where spectra netcdf are stored.
         If the netcdf file does exist already, read it in, modify it and overwrite the file.
         """
-        for i in range(len(self.training_data_out)):
+        for i, dataset in enumerate(self.training_data_out):
+            # Write a file if it does not exist yet
             if not os.path.isfile(self.peaks_ncfiles[i]):
-                data_dict = {'time': self.spec_data[i].time, 'range': self.spec_data[i].range_layers,
-                             'chirp': self.spec_data[i].chirp, 'peak': np.arange(self.max_peaks)}
-
-                data_dict['peaks'] = (['time', 'range', 'peak'], self.training_data_out[i])
-                dataset = xr.Dataset(data_dict)
                 dataset.to_netcdf(self.peaks_ncfiles[i])
                 print(f'created new file {self.peaks_ncfiles[i]}')
-
-            else:
-                with xr.open_dataset(self.peaks_ncfiles[i]) as data:
-                    dataset = data.load()
-                assert (self.training_data_out[i].shape == dataset.peaks.shape)
-                mask = ~np.isnan(self.training_data_out[i])
-                dataset.peaks.values[mask] = self.training_data_out[i][mask]
-                dataset.to_netcdf(self.peaks_ncfiles[i])
-                print(f'updated file {self.peaks_ncfiles[i]}')
+                return
+            # Concatenate the 'spec' dimension if the file already exists
+            with xr.open_dataset(self.peaks_ncfiles[i]) as data:
+                existing_dataset = data.load()
+            dataset = xr.concat([existing_dataset, dataset], dim='spec')
+            dataset.to_netcdf(self.peaks_ncfiles[i], mode='w')
+            print(f'updated file {self.peaks_ncfiles[i]}')
