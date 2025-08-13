@@ -1,6 +1,9 @@
 # Temporary files
 tmp/
 
+# VS Code workspace storage
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
