@@ -179,7 +179,7 @@ class TrainingData(object):
             self.training_data_out.append(self._empty_training_dataset(num_spec))
             ncfile = os.path.join(
                 os.path.dirname(self.specfiles_in[f]),
-                f'marked_peaks_{os.path.basename(self.specfiles_in[f])}.nc'
+                f'marked_peaks_{os.path.basename(self.specfiles_in[f])}'
             )
             self.peaks_ncfiles.append(ncfile)
             self.plot_count.append(0)
@@ -188,10 +188,9 @@ class TrainingData(object):
         data_dict = {
             'time': (('spec'), np.empty(num_spec, dtype='datetime64[ns]')),
             'range': (('spec'), np.empty(num_spec, dtype='float32')),
-            'chirp': (('spec'), np.empty(num_spec, dtype='int32')),
             'positions': (
                 ('spec', 'peak'),
-                np.empty((num_spec, self.max_peaks), dtype='int32')
+                np.full((num_spec, self.max_peaks), np.nan, dtype='float32')
             )
         }
         ds = xr.Dataset(data_dict)
