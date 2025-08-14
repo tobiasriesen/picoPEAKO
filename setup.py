@@ -12,6 +12,7 @@ setup(
         'numpy',
         'xarray',
         'matplotlib',
+        'tqdm',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
