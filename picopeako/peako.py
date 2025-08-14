@@ -12,6 +12,10 @@ import xarray as xr
 
 from picopeako import utils
 
+def enumerate_product(*iterables, repeat=1):
+    pools = [list(enumerate(it)) for it in iterables] * repeat
+    return product(*pools)
+
 
 class Peako:
     def __init__(self, params=None):
@@ -25,108 +29,117 @@ class Peako:
             'polyorder': 2,
         } | params
 
-    def train(self, filename, param_candidate_values):
-        # Load the spectra and the velocity bins for each spectrum that has a ground truth
-        ground_truth_filename = os.path.join(
-            os.path.dirname(filename), f'marked_peaks_{os.path.basename(filename)}'
-        )
-        train_dataset = xr.open_dataset(ground_truth_filename)
-        spectra_dataset = xr.open_dataset(filename)
-
-        times = train_dataset.time.values
-        ranges = train_dataset.range.values
-
-        # Calculate the time indices and range indices for each training sample
-        time_indices = [np.argmin(np.abs(
-            spectra_dataset.coords['time'].values -
-            (time.astype('datetime64[s]').astype(int) - 978307200)
-        )) for time in times]
-        range_indices = [
-            np.argmin(np.abs(spectra_dataset.range_layers.values - rnge)) for rnge in ranges
-        ]
-
-        positions = train_dataset.positions.values
-
-        velocity_bins = []
-        chirp_start_indices = spectra_dataset.chirp_start_indices.values
-        for i, range_index in enumerate(range_indices):
-            chirp_index = np.arange(len(chirp_start_indices))[
-                chirp_start_indices <= range_index
-            ][-1]
-            # TODO: This is inefficient, because it contains many duplicates.
-            vel_bins = spectra_dataset.velocity_vectors[chirp_index].values
-            velocity_bins.append(vel_bins)
-            # positions[i] = np.argmin(np.abs(vel_bins[:, None] - positions[0][None, :]), axis=0)
-
-        positions = np.array(positions, dtype=int)
-
+    def train(self, filenames, param_candidate_values, ground_truth_filenames=None):
         qualities = np.zeros((len(param_candidate_values['t_avg']),
-                                len(param_candidate_values['h_avg']),
-                                len(param_candidate_values['span']),
-                                len(param_candidate_values['polyorder']),
-                                len(param_candidate_values['width']),
-                                len(param_candidate_values['prom'])))
-        max_quality = -math.inf
-        max_params = None
+                              len(param_candidate_values['h_avg']),
+                              len(param_candidate_values['span']),
+                              len(param_candidate_values['polyorder']),
+                              len(param_candidate_values['width']),
+                              len(param_candidate_values['prom'])))
 
-        pbar = tqdm(
-            total=(len(param_candidate_values['t_avg']) * len(param_candidate_values['h_avg']) *
-                   len(param_candidate_values['span']) * len(param_candidate_values['polyorder']) *
-                   len(param_candidate_values['width']) * len(param_candidate_values['prom'])),
-            desc="Training Peako"
-        )
+        if ground_truth_filenames is None:
+            ground_truth_filenames = [os.path.join(
+                os.path.dirname(filename), f'marked_peaks_{os.path.basename(filename)}'
+            ) for filename in filenames]
 
-        # Iterate over the parameters of the average function
-        for t_avg, h_avg in product(
-            param_candidate_values['t_avg'], param_candidate_values['h_avg']
+        for filename, ground_truth_filename in tqdm(
+            zip(filenames, ground_truth_filenames), desc="Input files",
+            disable=len(filenames) == 1, total=len(filenames)
         ):
-            # Average the spectra using the parameters
-            averaged_spectra = [
-                self._average_single_spectrum(
-                    spectra_dataset.doppler_spectrum, t, h, params={'t_avg': t_avg, 'h_avg': h_avg}
-                ) for t, h in zip(time_indices, range_indices)
+            train_dataset = xr.open_dataset(ground_truth_filename)
+            spectra_dataset = xr.open_dataset(filename)
+
+            times = train_dataset.time.values
+            ranges = train_dataset.range.values
+
+            # Calculate the time indices and range indices for each training sample
+            time_indices = [np.argmin(np.abs(
+                spectra_dataset.coords['time'].values -
+                (time.astype('datetime64[s]').astype(int) - 978307200)
+            )) for time in times]
+            range_indices = [
+                np.argmin(np.abs(spectra_dataset.range_layers.values - rnge)) for rnge in ranges
             ]
-            # Iterate over the parameters of the smoothing function
-            for span, polyorder in product(
-                param_candidate_values['span'], param_candidate_values['polyorder']
+
+            positions = train_dataset.positions.values
+
+            velocity_bins = []
+            chirp_start_indices = spectra_dataset.chirp_start_indices.values
+            for i, range_index in enumerate(range_indices):
+                chirp_index = np.arange(len(chirp_start_indices))[
+                    chirp_start_indices <= range_index
+                ][-1]
+                # TODO: This is inefficient, because it contains many duplicates.
+                vel_bins = spectra_dataset.velocity_vectors[chirp_index].values
+                velocity_bins.append(vel_bins)
+
+            positions = np.array(positions, dtype=int)
+
+            pbar = tqdm(
+                total=(len(param_candidate_values['t_avg']) * len(param_candidate_values['h_avg']) *
+                       len(param_candidate_values['span']) * len(param_candidate_values['polyorder']) *
+                       len(param_candidate_values['width']) * len(param_candidate_values['prom'])),
+                desc="Combinations", leave=False
+            )
+
+            # Iterate over the parameters of the average function
+            for (i, t_avg), (j, h_avg) in enumerate_product(
+                param_candidate_values['t_avg'], param_candidate_values['h_avg']
             ):
-                # Smooth the averaged spectra using the parameters
-                smoothed_spectra = [
-                    self._smooth_single_spectrum(
-                        spectrum, velocity_bins[i], params={'span': span, 'polyorder': polyorder}
-                    ) for i, spectrum in enumerate(averaged_spectra)
+                # Average the spectra using the parameters
+                averaged_spectra = [
+                    self._average_single_spectrum(
+                        spectra_dataset.doppler_spectrum, t, h, params={'t_avg': t_avg, 'h_avg': h_avg}
+                    ) for t, h in zip(time_indices, range_indices)
                 ]
-
-                # Iterate over the parameters of the peak detection function
-                for width, prom in product(
-                    param_candidate_values['width'], param_candidate_values['prom']
+                # Iterate over the parameters of the smoothing function
+                for (k, span), (l, polyorder) in enumerate_product(
+                    param_candidate_values['span'], param_candidate_values['polyorder']
                 ):
-                    pbar.update(1)
+                    # Smooth the averaged spectra using the parameters
+                    smoothed_spectra = [
+                        self._smooth_single_spectrum(
+                            spectrum, velocity_bins[i], params={'span': span, 'polyorder': polyorder}
+                        ) for i, spectrum in enumerate(averaged_spectra)
+                    ]
 
-                    # Detect peaks in the smoothed spectra using the parameters
-                    detected_peaks = np.array([
-                        self._detect_single_spectrum(
-                            spectrum, prom, width, max_peaks=10
-                        ) for spectrum in smoothed_spectra
-                    ])
+                    # Iterate over the parameters of the peak detection function
+                    for (m, width), (n, prom) in enumerate_product(
+                        param_candidate_values['width'], param_candidate_values['prom']
+                    ):
+                        pbar.update(1)
 
-                    # Evaluate the peak detection quality using the quality metric
-                    quality = np.sum([AreaOverlapMetric().compute_metric(
-                        detected_peaks, positions[i], averaged_spectra[i], velocity_bins[i]
-                    ) for i in range(len(detected_peaks))])
+                        # Detect peaks in the smoothed spectra using the parameters
+                        detected_peaks = np.array([
+                            self._detect_single_spectrum(
+                                spectrum, prom, width, max_peaks=10
+                            ) for spectrum in smoothed_spectra
+                        ])
 
-                    max_quality = max(max_quality, quality)
-                    if quality == max_quality:
-                        max_params = {
-                            't_avg': t_avg,
-                            'h_avg': h_avg,
-                            'span': span,
-                            'width': width,
-                            'prom': prom,
-                            'polyorder': polyorder
-                        }
+                        # Evaluate the peak detection quality using the quality metric
+                        quality = np.sum([AreaOverlapMetric().compute_metric(
+                            detected_peaks, positions[i], averaged_spectra[i], velocity_bins[i]
+                        ) for i in range(len(detected_peaks))])
 
-        pbar.close()
+                        qualities[i, j, k, l, m, n] += quality
+
+            pbar.close()
+
+        # Save the quality metrics to a file
+        quality_filename = os.path.join(os.path.dirname(filename), 'peako_quality_metrics.npz')
+        np.savez(quality_filename, qualities=qualities)
+
+        # Find the best parameters based on the quality metrics
+        max_quality = np.max(qualities)
+        max_indices = np.unravel_index(np.argmax(qualities), qualities.shape)
+        max_params = {
+            't_avg': param_candidate_values['t_avg'][max_indices[0]],
+            'h_avg': param_candidate_values['h_avg'][max_indices[1]],
+            'span': param_candidate_values['span'][max_indices[2]],
+            'polyorder': param_candidate_values['polyorder'][max_indices[3]],
+            'width': param_candidate_values['width'][max_indices[4]],
+            'prom': param_candidate_values['prom'][max_indices[5]]
+        }
 
         return max_params, max_quality
 

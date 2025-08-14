@@ -1,7 +1,7 @@
 from picopeako import Peako
 
 pk = Peako()
-best_params, best_quality = pk.train('tmp/example.nc', {
+best_params, best_quality = pk.train(['tmp/example.nc', 'tmp/example.nc', 'tmp/example.nc'], {
     't_avg': [0, 1, 2],
     'h_avg': [0, 1, 2],
     'span': [0.1, 0.2, 0.3],
