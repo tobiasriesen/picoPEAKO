@@ -1,6 +1,5 @@
 # Deactivate flake8 for this file
 
-from itertools import product
 import math
 import os
 import warnings
@@ -12,12 +11,10 @@ import xarray as xr
 
 from picopeako import utils
 
-def enumerate_product(*iterables, repeat=1):
-    pools = [list(enumerate(it)) for it in iterables] * repeat
-    return product(*pools)
-
 
 class Peako:
+    PARAM_NAMES = ('t_avg', 'h_avg', 'span', 'polyorder', 'width', 'prom')
+
     def __init__(self, params=None):
         params = params or {}
         self.params = {
@@ -30,12 +27,9 @@ class Peako:
         } | params
 
     def train(self, filenames, param_candidate_values, ground_truth_filenames=None):
-        qualities = np.zeros((len(param_candidate_values['t_avg']),
-                              len(param_candidate_values['h_avg']),
-                              len(param_candidate_values['span']),
-                              len(param_candidate_values['polyorder']),
-                              len(param_candidate_values['width']),
-                              len(param_candidate_values['prom'])))
+        qualities = np.zeros(
+            tuple(len(param_candidate_values[param_name]) for param_name in self.PARAM_NAMES)
+        )
 
         if ground_truth_filenames is None:
             ground_truth_filenames = [os.path.join(
@@ -76,35 +70,36 @@ class Peako:
             positions = np.array(positions, dtype=int)
 
             pbar = tqdm(
-                total=(len(param_candidate_values['t_avg']) * len(param_candidate_values['h_avg']) *
-                       len(param_candidate_values['span']) * len(param_candidate_values['polyorder']) *
-                       len(param_candidate_values['width']) * len(param_candidate_values['prom'])),
-                desc="Combinations", leave=False
+                total=np.prod(
+                    [len(param_candidate_values[param_name]) for param_name in self.PARAM_NAMES]
+                ), desc="Combinations", leave=False
             )
 
             # Iterate over the parameters of the average function
-            for (i, t_avg), (j, h_avg) in enumerate_product(
+            for (i, t_avg), (j, h_avg) in utils.enumerate_product(
                 param_candidate_values['t_avg'], param_candidate_values['h_avg']
             ):
                 # Average the spectra using the parameters
                 averaged_spectra = [
                     self._average_single_spectrum(
-                        spectra_dataset.doppler_spectrum, t, h, params={'t_avg': t_avg, 'h_avg': h_avg}
+                        spectra_dataset.doppler_spectrum, t, h,
+                        params={'t_avg': t_avg, 'h_avg': h_avg}
                     ) for t, h in zip(time_indices, range_indices)
                 ]
                 # Iterate over the parameters of the smoothing function
-                for (k, span), (l, polyorder) in enumerate_product(
+                for (k, span), (l, polyorder) in utils.enumerate_product(
                     param_candidate_values['span'], param_candidate_values['polyorder']
                 ):
                     # Smooth the averaged spectra using the parameters
                     smoothed_spectra = [
                         self._smooth_single_spectrum(
-                            spectrum, velocity_bins[i], params={'span': span, 'polyorder': polyorder}
+                            spectrum, velocity_bins[i],
+                            params={'span': span, 'polyorder': polyorder}
                         ) for i, spectrum in enumerate(averaged_spectra)
                     ]
 
                     # Iterate over the parameters of the peak detection function
-                    for (m, width), (n, prom) in enumerate_product(
+                    for (m, width), (n, prom) in utils.enumerate_product(
                         param_candidate_values['width'], param_candidate_values['prom']
                     ):
                         pbar.update(1)
@@ -145,9 +140,7 @@ class Peako:
 
     def _get_params(self, override_params=None):
         params = self.params | (override_params or {})
-        return [params.get(variable) for variable in (
-            't_avg', 'h_avg', 'span', 'polyorder', 'width', 'prom'
-        )]
+        return [params.get(variable) for variable in self.PARAM_NAMES]
 
     def _average_single_spectrum(self, spec_chunk, t, h, params=None):
         t_avg, h_avg = self._get_params(override_params=params)[:2]
@@ -218,7 +211,9 @@ class AreaOverlapMetric(PeakDetectionQualityMetric):
         reference_peaks.sort()
         reference_peaks = np.unique(reference_peaks[~np.isnan(reference_peaks)])
         # convert velocities to indices
-        reference_peaks = np.asarray([utils.argnearest(velocity_bins, val) for val in reference_peaks])
+        reference_peaks = np.asarray(
+            [utils.argnearest(velocity_bins, val) for val in reference_peaks]
+        )
         detected_peaks = np.unique(detected_peaks[(detected_peaks > 0)])
         detected_peaks.sort()
 

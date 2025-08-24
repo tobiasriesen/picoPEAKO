@@ -1,9 +1,11 @@
-import numpy as np
 import datetime
+from itertools import product
+import os
+import warnings
+
+import numpy as np
 import xarray as xr
 import matplotlib
-import warnings
-import os
 
 star = matplotlib.path.Path.unit_regular_star(6)
 circle = matplotlib.path.Path.unit_circle()
@@ -11,6 +13,11 @@ circle = matplotlib.path.Path.unit_circle()
 verts = np.concatenate([circle.vertices, star.vertices[::-1, ...]])
 codes = np.concatenate([circle.codes, star.codes])
 cut_star = matplotlib.path.Path(verts, codes)
+
+
+def enumerate_product(*iterables, repeat=1):
+    pools = [list(enumerate(it)) for it in iterables] * repeat
+    return product(*pools)
 
 
 def z2lin(array):
