@@ -140,6 +140,53 @@ class Peako:
         params = self.params | (override_params or {})
         return [params.get(variable) for variable in self.PARAM_NAMES]
 
+    def _average_multiple_spectra(self, spec_data, params=None):
+        t_avg, h_avg = self._get_params(override_params=params)[:2]
+        average_data = []
+        for f in range(len(spec_data)):
+            # average spectra over neighbors in time-height
+            avg_specs = xr.Dataset({'doppler_spectrum': xr.DataArray(
+                np.zeros(spec_data[f].doppler_spectrum.shape), dims=['time', 'range', 'spectrum'],
+                coords={
+                    'time': spec_data[f].time.values, 'range': spec_data[f].range_layers.values,
+                    'spectrum': spec_data[f].spectrum.values
+                }
+            ), 'chirp': spec_data[f].chirp})
+
+            average_data.append(avg_specs)
+
+            B = np.ones((1 + t_avg * 2, 1 + h_avg * 2)) / ((1 + t_avg * 2) * (1 + h_avg * 2))
+            range_offsets = spec_data[f].chirp_start_indices.values
+            for d in range(avg_specs['doppler_spectrum'].values.shape[2]):
+                one_bin_avg = self._average_single_bin(
+                    spec_data[f]['doppler_spectrum'].values, B, d, range_offsets
+                )
+                avg_specs['doppler_spectrum'][:, :, d] = one_bin_avg
+
+        return average_data
+
+    def _average_single_bin(self, specdata_values: np.array, B: np.array,
+                            doppler_bin: int, range_offsets: list):
+        C = []
+        r_ind = np.hstack((range_offsets, specdata_values.shape[1]))
+        for c in range(len(r_ind) - 1):
+            A = specdata_values[:, r_ind[c]:r_ind[c + 1], doppler_bin]
+
+            # Convolve with special handling of NaN values:
+            # Based on https://stackoverflow.com/questions/38318362/2d-convolution-in-python-with-missing-data # noqa
+            # When more than 50% of the values in the convolution window are NaN, the result is set
+            # to NaN. Otherwise, only the available values are used for the convolution.
+            convolved = si.convolve2d(np.where(np.isnan(A), 0, A), B[::-1, ::-1], mode='same')
+            valid_weight = si.convolve2d(~np.isnan(A), B[::-1, ::-1], mode='same')
+            convolved = np.where(valid_weight > 0, convolved / valid_weight, np.nan)
+            count_missing = si.convolve2d(np.isnan(A), np.full_like(B, 1/B.size), mode='same')
+            convolved[count_missing > 0.5] = np.nan
+
+            C.append(si.convolve2d(A, B, mode='same'))
+
+        C = np.hstack(C)
+        return C
+
     def _average_single_spectrum(self, spec_chunk, t, h, params=None):
         t_avg, h_avg = self._get_params(override_params=params)[:2]
         tmin = np.max([0, t - t_avg])
