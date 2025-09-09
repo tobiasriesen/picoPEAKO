@@ -105,7 +105,7 @@ class Peako:
                         # Detect peaks in the smoothed spectra using the parameters
                         detected_peaks = np.array([
                             self._detect_single_spectrum(
-                                spectrum, prom, width, max_peaks=10
+                                spectrum, max_peaks=10, params={'prom': prom, 'width': width}
                             ) for spectrum in smoothed_spectra
                         ])
 
@@ -135,6 +135,29 @@ class Peako:
         }
 
         return max_params, max_quality
+
+    def process(self, spec_data, params=None):
+        max_peaks = 5
+        params = self.params | (params or {})
+        if params['t_avg'] > 0 or params['h_avg'] > 0:
+            spec_data = self._average_multiple_spectra(spec_data, params=params)
+        processed_spectra = []
+        for f in range(len(spec_data)):
+            processed = np.zeros(
+                spec_data[f]['doppler_spectrum'].shape[:2] + (max_peaks,), dtype=float
+            )
+            for t in range(spec_data[f]['doppler_spectrum'].shape[0]):
+                for h in range(spec_data[f]['doppler_spectrum'].shape[1]):
+                    # TODO: Fix velocity bins
+                    smoothed = self._smooth_single_spectrum(
+                        spec_data[f]['doppler_spectrum'][t][h].values,
+                        np.arange(119), params=params
+                    )
+                    detected = self._detect_single_spectrum(smoothed, max_peaks, params=params)
+                    processed[t][h] = detected
+
+            processed_spectra.append(processed)
+        return processed_spectra
 
     def _get_params(self, override_params=None):
         params = self.params | (override_params or {})
@@ -199,6 +222,7 @@ class Peako:
             axis=(0, 1)
         )
 
+    # TODO: The velbins is a useless feature. Please remove it.
     def _smooth_single_spectrum(self, averaged_spectrum, velbins, params=None):
         span, polyorder = self._get_params(override_params=params)[2:4]
 
@@ -220,7 +244,8 @@ class Peako:
         )
         return utils.z2lin(smoothed_spectrum)
 
-    def _detect_single_spectrum(self, spectrum, prom, width_thresh, max_peaks):
+    def _detect_single_spectrum(self, spectrum, max_peaks, params=None):
+        width_thresh, prom = self._get_params(override_params=params)[4:6]
         # Convert to logarithmic scale and replace NaNs with a fill value
         fillvalue = -100.0
         spectrum = utils.lin2z(spectrum)
@@ -234,7 +259,7 @@ class Peako:
 
         # Artificially create output dimension of same length as Doppler bins to
         # avoid xarray value error
-        out = np.full(spectrum.shape[0], 0, dtype=int)
+        out = np.full((max_peaks), 0, dtype=int)
         out[range(len(locs))] = locs
 
         return out

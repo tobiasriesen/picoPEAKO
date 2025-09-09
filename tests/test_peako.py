@@ -50,6 +50,33 @@ class TestPeako(unittest.TestCase):
         np.testing.assert_allclose(smoothed[15:18], 10**(-2/3), atol=1e-10)
         np.testing.assert_allclose(smoothed[18:32], 0.1, atol=1e-10)
 
+    def test_detect_single_spectrum(self):
+        data = ((np.arange(32) == 16).astype(float)) * 0.9 + 0.1
+        max_peaks = 5
+        peako = Peako()
+
+        peaks = peako._detect_single_spectrum(data, max_peaks, params={'width': 1, 'prom': 1})
+
+        self.assertIsInstance(peaks, np.ndarray)
+        self.assertEqual(peaks.shape, (max_peaks,))
+        self.assertEqual(peaks[0], 16)
+        self.assertEqual(peaks[1], 0)
+        self.assertEqual(peaks[2], 0)
+        self.assertEqual(peaks[3], 0)
+        self.assertEqual(peaks[4], 0)
+
+    def test_process(self):
+        data = build_example_dataset()
+        peako = Peako()
+
+        peaks = peako.process([data], params={
+            't_avg': 2, 'h_avg': 2, 'span': 2, 'polyorder': 1, 'width': 1, 'prom': 1
+        })
+
+        self.assertIsInstance(peaks, list)
+        self.assertIsInstance(peaks[0], np.ndarray)
+        self.assertEqual(peaks[0].shape, (5, 5, 5))
+
 
 if __name__ == '__main__':
     unittest.main()
