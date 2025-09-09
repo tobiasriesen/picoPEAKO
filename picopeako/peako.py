@@ -13,7 +13,7 @@ from picopeako import AreaOverlapMetric, utils
 class Peako:
     PARAM_NAMES = ('t_avg', 'h_avg', 'span', 'polyorder', 'width', 'prom')
 
-    def __init__(self, params=None):
+    def __init__(self, params=None, max_peaks=5):
         params = params or {}
         self.params = {
             't_avg': 0,
@@ -23,6 +23,7 @@ class Peako:
             'prom': 0.0,
             'polyorder': 2,
         } | params
+        self.max_peaks = max_peaks
 
     def train(self, filenames, param_candidate_values, ground_truth_filenames=None):
         qualities = np.zeros(
@@ -137,14 +138,13 @@ class Peako:
         return max_params, max_quality
 
     def process(self, spec_data, params=None):
-        max_peaks = 5
         params = self.params | (params or {})
         if params['t_avg'] > 0 or params['h_avg'] > 0:
             spec_data = self._average_multiple_spectra(spec_data, params=params)
         processed_spectra = []
         for f in range(len(spec_data)):
             processed = np.zeros(
-                spec_data[f]['doppler_spectrum'].shape[:2] + (max_peaks,), dtype=float
+                spec_data[f]['doppler_spectrum'].shape[:2] + (self.max_peaks,), dtype=float
             )
             for t in range(spec_data[f]['doppler_spectrum'].shape[0]):
                 for h in range(spec_data[f]['doppler_spectrum'].shape[1]):
@@ -153,7 +153,7 @@ class Peako:
                         spec_data[f]['doppler_spectrum'][t][h].values,
                         np.arange(119), params=params
                     )
-                    detected = self._detect_single_spectrum(smoothed, max_peaks, params=params)
+                    detected = self._detect_single_spectrum(smoothed, params=params)
                     processed[t][h] = detected
 
             processed_spectra.append(processed)
@@ -244,7 +244,7 @@ class Peako:
         )
         return utils.z2lin(smoothed_spectrum)
 
-    def _detect_single_spectrum(self, spectrum, max_peaks, params=None):
+    def _detect_single_spectrum(self, spectrum, params=None):
         width_thresh, prom = self._get_params(override_params=params)[4:6]
         # Convert to logarithmic scale and replace NaNs with a fill value
         fillvalue = -100.0
@@ -255,11 +255,11 @@ class Peako:
         # it is important that nan values are not included in the spectrum passed to si
         locs, _ = si.find_peaks(spectrum, prominence=prom, width=width_thresh)
         locs = locs[spectrum[locs] > fillvalue]
-        locs = locs[0: max_peaks]
+        locs = locs[0: self.max_peaks]
 
         # Artificially create output dimension of same length as Doppler bins to
         # avoid xarray value error
-        out = np.full((max_peaks), 0, dtype=int)
+        out = np.full((self.max_peaks), 0, dtype=int)
         out[range(len(locs))] = locs
 
         return out

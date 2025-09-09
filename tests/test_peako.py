@@ -55,7 +55,7 @@ class TestPeako(unittest.TestCase):
         max_peaks = 5
         peako = Peako()
 
-        peaks = peako._detect_single_spectrum(data, max_peaks, params={'width': 1, 'prom': 1})
+        peaks = peako._detect_single_spectrum(data, params={'width': 1, 'prom': 1})
 
         self.assertIsInstance(peaks, np.ndarray)
         self.assertEqual(peaks.shape, (max_peaks,))
