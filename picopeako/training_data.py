@@ -1,86 +1,13 @@
 import datetime
 import os
 import random
-import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.signal
 import xarray as xr
 
-
-def lin2z(array):
-    """
-    convert linear values to dB (for np.array or single number)
-    :param array: np.array or single number
-    :return:
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        out = 10 * np.log10(array)
-        return out
-
-
-def format_hms(unixtime):
-    """format time stamp in seconds since 01.01.1970 00:00 UTC to HH:MM:SS
-    :param unixtime: time stamp (seconds since 01.01.1970 00:00 UTC)
-    """
-    return datetime.datetime.utcfromtimestamp(unixtime).strftime("%H:%M:%S")
-
-
-def round_to_odd(f):
-    """round to odd number
-    :param f: float number to be rounded to odd number
-    """
-    return round(f) if round(f) % 2 == 1 else round(f) + 1
-
-
-def argnearest(array, value):
-    """
-    larda function to find the index of the nearest value in a sorted array, for example time or
-    range axis
-
-    :param array: sorted array with values, list and dask arrays will be converted to 1D array
-    :param value: value for which to find the nearest neighbor
-    :return:
-        index of the nearest neighbor in array
-    """
-    if type(array) in [list, xr.DataArray]:
-        array = np.array(array)
-    i = np.searchsorted(array, value) - 1
-
-    if not i == array.shape[0] - 1:
-        if np.abs(array[i] - value) > np.abs(array[i + 1] - value):
-            i = i + 1
-    return i
-
-
-def get_vel_resolution(vel_bins):
-    return np.nanmedian(np.diff(vel_bins))
-
-
-def get_chirp_offsets(specdata):
-    """
-    utility function to create an array of the range indices of chirp offsets, starting with [0]
-    and ending with [n_range_layers]
-    :param specdata: Doppler spectra DataSet containing chirp_start_indices and n_range_layers
-    :return:
-    """
-    return np.hstack((specdata.chirp_start_indices.values, specdata.n_range_layers.values))
-
-
-def get_closest_time(time, time_array):
-    """"
-    :param time: datetime.datetime
-    :param time_array: xr.DataArray containing time stamp
-    """
-    time_array = time_array.values
-    if (time_array < 1e9).all() and (time_array > 3e8).all():
-        time_array += (
-            (datetime.datetime(2001, 1, 1) - datetime.datetime(1970, 1, 1)).total_seconds()
-        )
-    ts = (time - datetime.datetime(1970, 1, 1)).total_seconds()
-    return argnearest(time_array, ts)
+from picopeako import utils
 
 
 class TrainingData(object):
@@ -125,12 +52,12 @@ class TrainingData(object):
         for n in range(len(self.spec_data)):
             s = 0
             if closeby[n] is not None:
-                tind = get_closest_time(closeby[n][0], self.spec_data[n].time)
+                tind = utils.get_closest_time(closeby[n][0], self.spec_data[n].time)
                 tind = (
                     np.max([1, tind - 10]),
                     np.min([self.tdim[n] - 1, tind + 10])
                 )
-                rind = argnearest(self.spec_data[n].range, closeby[n][1])
+                rind = utils.argnearest(self.spec_data[n].range, closeby[n][1])
                 rind = (
                     np.max([1, rind - 5]),
                     np.min([self.rdim[n] - 1, rind + 5])
@@ -208,10 +135,8 @@ class TrainingData(object):
 
         peakVals = []
         peakPowers = []
-        # TODO replace with get_chirp_offsets
         n_rg = self.spec_data[n_file]['chirp_start_indices']
         c_ind = np.digitize(r_index, n_rg)
-        # print(f'range index {r_index} is in chirp {c_ind} with ranges in chirps {n_rg[1:]}')
 
         heightindex_center = r_index
         timeindex_center = t_index
@@ -258,11 +183,11 @@ class TrainingData(object):
                             self.spec_data[n_file]["range_layers"].values[int(heightindex)] / 1000,
                             2
                         )
-                        time_in_hms = format_hms(
+                        time_in_hms = utils.format_hms(
                             self.spec_data[n_file]["time"].values[int(timeindex)]
                         )
 
-                        ax[dim1, dim2].plot(velbins, lin2z(thisSpectrum.values))
+                        ax[dim1, dim2].plot(velbins, np.where(np.isnan(thisSpectrum.values), 0, thisSpectrum.values))
                         ax[dim1, dim2].set_xlim(xlim)
                         ax[dim1, dim2].set_title(
                             f'range:'
@@ -278,15 +203,16 @@ class TrainingData(object):
                         )
                         ax[dim1, dim2].grid(True)
 
-            ax[1, 1].plot(velbins, lin2z(this_spectrum_center.values), label='raw')
+            ax[1, 1].plot(velbins, np.where(np.isnan(this_spectrum_center.values), 0, this_spectrum_center.values))
+            # ax[1, 1].plot(velbins, utils.lin2z(this_spectrum_center.values), label='raw')
             if plot_smoothed:
                 assert 'span' in kwargs, (
                     "span required for mark_random_spectra if plot_smoothed is True"
                 )
-                window_length = round_to_odd(
-                    kwargs['span'] / get_vel_resolution(velbins)
+                window_length = utils.round_to_odd(
+                    kwargs['span'] / utils.get_vel_resolution(velbins)
                 )
-                smoothed_spectrum = lin2z(this_spectrum_center.values)
+                smoothed_spectrum = utils.lin2z(this_spectrum_center.values)
                 if not window_length == 1:
                     smoothed_spectrum[~np.isnan(smoothed_spectrum)] = scipy.signal.savgol_filter(
                         smoothed_spectrum[~np.isnan(smoothed_spectrum)],
@@ -310,7 +236,9 @@ class TrainingData(object):
             range_in_km = np.round(
                 self.spec_data[n_file]["range_layers"].values[int(heightindex_center)] / 1000, 2
             )
-            time_in_hms = format_hms(self.spec_data[n_file]["time"].values[int(timeindex_center)])
+            time_in_hms = utils.format_hms(
+                self.spec_data[n_file]["time"].values[int(timeindex_center)]
+            )
 
             ax[1, 1].set_title(
                 f'range:'
@@ -341,7 +269,7 @@ class TrainingData(object):
             if not os.path.isfile(self.peaks_ncfiles[i]):
                 dataset.to_netcdf(self.peaks_ncfiles[i])
                 print(f'created new file {self.peaks_ncfiles[i]}')
-                return
+                continue
             # Concatenate the 'spec' dimension if the file already exists
             with xr.open_dataset(self.peaks_ncfiles[i]) as data:
                 existing_dataset = data.load()

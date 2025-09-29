@@ -12,14 +12,12 @@ class AreaOverlapMetric(PeakDetectionQualityMetric):
     def compute_metric(self, detected_peaks, reference_peaks, spectrum, velocity_bins):
         # Convert the spectrum to logarithmic units
         spectrum_db = utils.lin2z(spectrum)
+        spectrum = np.where(np.isnan(spectrum), self.FILL_VALUE, spectrum)
 
         # Sort the peaks
         reference_peaks.sort()
         reference_peaks = np.unique(reference_peaks[~np.isnan(reference_peaks)])
         # convert velocities to indices
-        reference_peaks = np.asarray(
-            [utils.argnearest(velocity_bins, val) for val in reference_peaks]
-        )
         detected_peaks = np.unique(detected_peaks[(detected_peaks > 0)])
         detected_peaks.sort()
 
