@@ -11,11 +11,11 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.7"
-scipy = "^1.7"
-numpy = "^1.21"
-xarray = "^0.18"
-matplotlib = "^3.4"
-tqdm = "^4.62"
+scipy = ">=1.7"
+numpy = ">=1.21"
+xarray = ">=0.18"
+matplotlib = ">=3.4"
+tqdm = ">=4.62"
 
 [tool.poetry.dev-dependencies]
-pytest = "^6.2"
+pytest = ">=6.2"
